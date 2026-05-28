@@ -1,0 +1,42 @@
+{
+  "name": "toy-lsp",
+  "displayName": "Toy LSP",
+  "description": "Toy LSP demo — hover shows word/char count",
+  "version": "0.1.0",
+  "publisher": "local",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "activationEvents": [
+    "onLanguage:toylang"
+  ],
+  "main": "./extension.js",
+  "dependencies": {
+    "vscode-languageclient": "^9.0.0"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "toylang",
+        "extensions": [
+          ".toy"
+        ]
+      }
+    ],
+    "configuration": {
+      "title": "Toy LSP",
+      "properties": {
+        "toyLsp.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the toy_lsp server binary. If empty, looks next to the extension."
+        }
+      }
+    }
+  }
+}

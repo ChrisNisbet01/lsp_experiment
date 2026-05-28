@@ -1,5 +1,6 @@
 #include "server.h"
 
+#include "documents.h"
 #include "handlers.h"
 #include "utils.h"
 
@@ -157,11 +158,13 @@ handle_rpc_message(rpc_server_st * svr, struct json_object * msg)
 
     if (!json_object_is_type(msg, json_type_object))
     {
+        fprintf(stderr, "[LSP] Error: message is not a JSON object\n");
         return;
     }
 
     if (!json_object_object_get_ex(msg, "jsonrpc", &version) || strcmp(json_object_get_string(version), "2.0") != 0)
     {
+        fprintf(stderr, "[LSP] Error: invalid JSON-RPC version\n");
         return;
     }
 
@@ -169,6 +172,7 @@ handle_rpc_message(rpc_server_st * svr, struct json_object * msg)
 
     if (!json_object_object_get_ex(msg, "method", &method_obj) || !json_object_is_type(method_obj, json_type_string))
     {
+        fprintf(stderr, "[LSP] Error: invalid method\n");
         if (id)
         {
             queue_error_response(svr, id, -32600, "Invalid Request");
@@ -177,11 +181,15 @@ handle_rpc_message(rpc_server_st * svr, struct json_object * msg)
     }
 
     char const * method_name = json_object_get_string(method_obj);
+
+    fprintf(stderr, "[LSP] Handling method: %s, num_methods: %zu\n", method_name, svr->registry.count);
+
     json_object_object_get_ex(msg, "params", &params);
 
     rpc_handler_fn handler = NULL;
     for (size_t i = 0; i < svr->registry.count; i++)
     {
+        fprintf(stderr, "[LSP] Comparing method: %s with %s\n", method_name, svr->registry.methods[i].name);
         if (strcmp(svr->registry.methods[i].name, method_name) == 0)
         {
             handler = svr->registry.methods[i].handler;
@@ -191,14 +199,22 @@ handle_rpc_message(rpc_server_st * svr, struct json_object * msg)
 
     if (handler)
     {
+        fprintf(stderr, "[LSP] Calling handler for method: %s\n", method_name);
         if (!handler(svr, params, id))
         {
+            fprintf(stderr, "[LSP] Error: failed to handle method '%s'\n", method_name);
             queue_error_response(svr, id, -32600, "Invalid Request");
         }
+        fprintf(stderr, "[LSP] Finished handling method: %s\n", method_name);
     }
     else if (id)
     {
+        fprintf(stderr, "[LSP] Error: method '%s' not found\n", method_name);
         queue_error_response(svr, id, -32601, "Method not found");
+    }
+    else
+    {
+        fprintf(stderr, "[LSP] Error: method '%s' not found (notification)\n", method_name);
     }
 }
 
@@ -207,6 +223,8 @@ stdin_cb(struct uloop_fd * u, unsigned int events)
 {
     UNUSED_PARAM(events);
     rpc_server_st * const svr = container_of(u, rpc_server_st, stdin_fd);
+
+    fprintf(stderr, "[LSP] %s\n", __func__);
 
     if (u->eof)
     {
@@ -243,6 +261,8 @@ stdin_cb(struct uloop_fd * u, unsigned int events)
     }
 
     svr->buf_len += (size_t)n;
+    svr->buf[svr->buf_len] = '\0';
+    fprintf(stderr, "[LSP] read %zd bytes (buf_len=%zu)\n", n, svr->buf_len);
 
     while (1)
     {
@@ -271,8 +291,7 @@ stdin_cb(struct uloop_fd * u, unsigned int events)
                 break;
             }
 
-            if (sscanf(content_len_str, "Content-Length: %d", &svr->content_length) != 1
-                || svr->content_length < 0)
+            if (sscanf(content_len_str, "Content-Length: %d", &svr->content_length) != 1 || svr->content_length < 0)
             {
                 fprintf(stderr, "Error: invalid Content-Length\n");
                 uloop_end();
@@ -306,6 +325,9 @@ stdin_cb(struct uloop_fd * u, unsigned int events)
             struct json_object * msg = json_tokener_parse(svr->buf);
             if (msg != NULL)
             {
+                fprintf(
+                    stderr, "[LSP] Parsed message: %s\n", json_object_to_json_string_ext(msg, JSON_C_TO_STRING_PLAIN)
+                );
                 handle_rpc_message(svr, msg);
                 json_object_put(msg);
             }
@@ -328,6 +350,7 @@ stdin_cb(struct uloop_fd * u, unsigned int events)
 void
 run_server(rpc_server_st * const svr, int const in_fd, int const out_fd)
 {
+    fprintf(stderr, "[LSP] Server starting on in_fd=%d, out_fd=%d\n", in_fd, out_fd);
     svr->out_fd = out_fd;
     svr->in_fd = in_fd;
     svr->in_header = true;
@@ -335,6 +358,8 @@ run_server(rpc_server_st * const svr, int const in_fd, int const out_fd)
 
     int flags = fcntl(out_fd, F_GETFL, 0);
     fcntl(out_fd, F_SETFL, flags | O_NONBLOCK);
+
+    documents_init();
 
     uloop_init();
     INIT_LIST_HEAD(&svr->write_queue);
@@ -351,6 +376,7 @@ run_server(rpc_server_st * const svr, int const in_fd, int const out_fd)
     uloop_run();
 
     rpc_server_registry_cleanup(svr);
+    documents_cleanup();
     uloop_done();
 
     if (in_fd != STDIN_FILENO)

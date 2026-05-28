@@ -5,6 +5,7 @@ set(SOURCE_FILES
   main.c
   server.c
   handlers.c
+  documents.c
   utils.c
 )
 
