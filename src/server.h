@@ -36,8 +36,9 @@ typedef struct rpc_server_st
     struct runqueue tool_queue;
 
     /* Parsing state for Content-Length framed protocol. */
-    char buf[65536];
+    char * buf;
     size_t buf_len;
+    size_t buf_cap;
     int content_length;
     bool in_header;
 

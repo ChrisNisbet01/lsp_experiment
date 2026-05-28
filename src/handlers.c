@@ -476,12 +476,24 @@ handle_function_complexity(rpc_server_st * svr, struct json_object * params, str
     return true;
 }
 
+/* --- No-op handlers for standard LSP notifications --- */
+
+static bool
+handle_initialized(rpc_server_st * svr, struct json_object * params, struct json_object * id)
+{
+    UNUSED_PARAM(svr);
+    UNUSED_PARAM(params);
+    UNUSED_PARAM(id);
+    return true;
+}
+
 /* --- Registration --- */
 
 void
 rpc_server_register_handlers(rpc_server_st * svr)
 {
     rpc_server_register_method(svr, "initialize", handle_initialize);
+    rpc_server_register_method(svr, "initialized", handle_initialized);
     rpc_server_register_method(svr, "shutdown", handle_shutdown);
     rpc_server_register_method(svr, "exit", handle_exit);
     rpc_server_register_method(svr, "textDocument/didOpen", handle_text_document_did_open);

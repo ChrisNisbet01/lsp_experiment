@@ -183,14 +183,11 @@ handle_rpc_message(rpc_server_st * svr, struct json_object * msg)
 
     char const * method_name = json_object_get_string(method_obj);
 
-    fprintf(stderr, "[LSP] Handling method: %s, num_methods: %zu\n", method_name, svr->registry.count);
-
     json_object_object_get_ex(msg, "params", &params);
 
     rpc_handler_fn handler = NULL;
     for (size_t i = 0; i < svr->registry.count; i++)
     {
-        fprintf(stderr, "[LSP] Comparing method: %s with %s\n", method_name, svr->registry.methods[i].name);
         if (strcmp(svr->registry.methods[i].name, method_name) == 0)
         {
             handler = svr->registry.methods[i].handler;
@@ -200,13 +197,11 @@ handle_rpc_message(rpc_server_st * svr, struct json_object * msg)
 
     if (handler)
     {
-        fprintf(stderr, "[LSP] Calling handler for method: %s\n", method_name);
         if (!handler(svr, params, id))
         {
             fprintf(stderr, "[LSP] Error: failed to handle method '%s'\n", method_name);
             queue_error_response(svr, id, -32600, "Invalid Request");
         }
-        fprintf(stderr, "[LSP] Finished handling method: %s\n", method_name);
     }
     else if (id)
     {
@@ -219,13 +214,37 @@ handle_rpc_message(rpc_server_st * svr, struct json_object * msg)
     }
 }
 
+static bool
+append_to_buffer(rpc_server_st * svr, char const * data, size_t data_len)
+{
+    size_t needed = svr->buf_len + data_len;
+    if (needed > svr->buf_cap)
+    {
+        size_t new_cap = svr->buf_cap == 0 ? 4096 : svr->buf_cap * 2;
+        while (new_cap < needed)
+        {
+            new_cap *= 2;
+        }
+        char * new_buf = realloc(svr->buf, new_cap);
+        if (!new_buf)
+        {
+            perror("realloc");
+            return false;
+        }
+        svr->buf = new_buf;
+        svr->buf_cap = new_cap;
+    }
+    memcpy(svr->buf + svr->buf_len, data, data_len);
+    svr->buf_len = needed;
+    svr->buf[svr->buf_len] = '\0';
+    return true;
+}
+
 static void
 stdin_cb(struct uloop_fd * u, unsigned int events)
 {
     UNUSED_PARAM(events);
     rpc_server_st * const svr = container_of(u, rpc_server_st, stdin_fd);
-
-    fprintf(stderr, "[LSP] %s\n", __func__);
 
     if (u->eof)
     {
@@ -242,8 +261,9 @@ stdin_cb(struct uloop_fd * u, unsigned int events)
         return;
     }
 
-    size_t space = sizeof(svr->buf) - svr->buf_len;
-    ssize_t n = read(u->fd, svr->buf + svr->buf_len, space);
+    /* Read into a local stack buffer, then append to the dynamic buffer. */
+    char tmp[4096];
+    ssize_t n = read(u->fd, tmp, sizeof(tmp));
 
     if (n <= 0)
     {
@@ -261,8 +281,11 @@ stdin_cb(struct uloop_fd * u, unsigned int events)
         return;
     }
 
-    svr->buf_len += (size_t)n;
-    svr->buf[svr->buf_len] = '\0';
+    if (!append_to_buffer(svr, tmp, (size_t)n))
+    {
+        uloop_end();
+        return;
+    }
     fprintf(stderr, "[LSP] read %zd bytes (buf_len=%zu)\n", n, svr->buf_len);
 
     while (1)
@@ -274,25 +297,18 @@ stdin_cb(struct uloop_fd * u, unsigned int events)
 
             if (content_len_str == NULL)
             {
-                /* No header found yet. Error if we see the blank line marker
-                 * (malformed: body arrived before Content-Length) or if the
-                 * buffer is full. */
+                /* No header found yet. Error if we see the blank line marker */
                 if (strstr(svr->buf, "\r\n\r\n"))
                 {
                     fprintf(stderr, "Error: missing Content-Length header\n");
                     uloop_end();
                     return;
                 }
-                if (svr->buf_len >= sizeof(svr->buf) - 1)
-                {
-                    fprintf(stderr, "Error: header buffer full\n");
-                    uloop_end();
-                    return;
-                }
                 break;
             }
 
-            if (sscanf(content_len_str, "Content-Length: %d", &svr->content_length) != 1 || svr->content_length < 0)
+            if (sscanf(content_len_str, "Content-Length: %d", &svr->content_length) != 1
+                || svr->content_length < 0)
             {
                 fprintf(stderr, "Error: invalid Content-Length\n");
                 uloop_end();
@@ -310,6 +326,7 @@ stdin_cb(struct uloop_fd * u, unsigned int events)
             size_t const remaining = svr->buf_len - header_consumed;
             memmove(svr->buf, svr->buf + header_consumed, remaining);
             svr->buf_len = remaining;
+            svr->buf[svr->buf_len] = '\0';
             svr->in_header = false;
         }
         else
@@ -326,9 +343,6 @@ stdin_cb(struct uloop_fd * u, unsigned int events)
             struct json_object * msg = json_tokener_parse(svr->buf);
             if (msg != NULL)
             {
-                fprintf(
-                    stderr, "[LSP] Parsed message: %s\n", json_object_to_json_string_ext(msg, JSON_C_TO_STRING_PLAIN)
-                );
                 handle_rpc_message(svr, msg);
                 json_object_put(msg);
             }
@@ -342,6 +356,7 @@ stdin_cb(struct uloop_fd * u, unsigned int events)
             size_t const remaining = svr->buf_len - (size_t)svr->content_length;
             memmove(svr->buf, svr->buf + svr->content_length, remaining);
             svr->buf_len = remaining;
+            svr->buf[svr->buf_len] = '\0';
             svr->content_length = -1;
             svr->in_header = true;
         }
@@ -381,6 +396,8 @@ run_server(rpc_server_st * const svr, int const in_fd, int const out_fd)
     rpc_server_registry_cleanup(svr);
     runqueue_kill(&svr->tool_queue);
     documents_cleanup();
+    free(svr->buf);
+    svr->buf = NULL;
     uloop_done();
 
     if (in_fd != STDIN_FILENO)
