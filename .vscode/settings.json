@@ -1,0 +1,6 @@
+{
+    "cToolsLsp.includePaths": [
+        "/home/chris/projects/lsp_experiment/src",
+        "/usr/local/include"
+    ]
+}

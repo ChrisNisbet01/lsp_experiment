@@ -14,10 +14,7 @@ rpc_register_method(rpc_server_st * svr, char const * name, rpc_handler_fn handl
     if (svr->registry.count == svr->registry.capacity)
     {
         svr->registry.capacity = svr->registry.capacity == 0 ? 8 : svr->registry.capacity * 2;
-        svr->registry.methods = realloc(
-            svr->registry.methods,
-            svr->registry.capacity * sizeof(*svr->registry.methods)
-        );
+        svr->registry.methods = realloc(svr->registry.methods, svr->registry.capacity * sizeof(*svr->registry.methods));
     }
 
     size_t const idx = svr->registry.count;
@@ -37,7 +34,8 @@ rpc_send_inner(rpc_server_st * svr, struct json_object * msg)
 
     size_t total_len = (size_t)hdr_len + json_len;
     char * framed = malloc(total_len);
-    if (!framed)
+
+    if (framed == NULL)
     {
         return;
     }
@@ -105,8 +103,7 @@ rpc_dispatch(rpc_server_st * svr, struct json_object * msg)
         return;
     }
 
-    if (!json_object_object_get_ex(msg, "jsonrpc", &version)
-        || strcmp(json_object_get_string(version), "2.0") != 0)
+    if (!json_object_object_get_ex(msg, "jsonrpc", &version) || strcmp(json_object_get_string(version), "2.0") != 0)
     {
         fprintf(stderr, "[RPC] Error: invalid JSON-RPC version\n");
         return;
@@ -114,8 +111,7 @@ rpc_dispatch(rpc_server_st * svr, struct json_object * msg)
 
     json_object_object_get_ex(msg, "id", &id);
 
-    if (!json_object_object_get_ex(msg, "method", &method_obj)
-        || !json_object_is_type(method_obj, json_type_string))
+    if (!json_object_object_get_ex(msg, "method", &method_obj) || !json_object_is_type(method_obj, json_type_string))
     {
         fprintf(stderr, "[RPC] Error: invalid method\n");
         if (id)

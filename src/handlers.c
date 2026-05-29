@@ -16,52 +16,69 @@
 #include <string.h>
 #include <unistd.h>
 
-#define CYCLOMATIC_COMPLEXITY_PATH                            \
-    "/home/chris/projects/c_tools/cyclomatic_complexity/"     \
+#define CYCLOMATIC_COMPLEXITY_PATH                                                                                     \
+    "/home/chris/projects/c_tools/cyclomatic_complexity/"                                                              \
     "build/cyclomatic_complexity"
 
 /* --- Lifecycle --- */
 
 static bool
-handle_initialize(rpc_server_st * svr, struct json_object * params, struct json_object * id)
+handle_include_paths(rpc_server_st * svr, struct json_object * init_opts)
 {
-    struct json_object * init_opts = NULL;
     struct json_object * include_paths_arr = NULL;
 
-    if (json_object_object_get_ex(params, "initializationOptions", &init_opts))
+    if (json_object_object_get_ex(init_opts, "includePaths", &include_paths_arr)
+        && json_object_is_type(include_paths_arr, json_type_array))
     {
-        if (json_object_object_get_ex(init_opts, "includePaths", &include_paths_arr)
-            && json_object_is_type(include_paths_arr, json_type_array))
+        int const count = json_object_array_length(include_paths_arr);
+        fprintf(stderr, "[LSP] initialize: received %d include paths\n", count);
+        if (count > 0)
         {
-            int const count = json_object_array_length(include_paths_arr);
-            fprintf(stderr, "[LSP] initialize: received %d include paths\n", count);
-            if (count > 0)
+            svr->include_paths = calloc((size_t)count, sizeof(*svr->include_paths));
+            if (svr->include_paths)
             {
-                svr->include_paths = calloc((size_t)count, sizeof(char *));
-                if (svr->include_paths)
+                svr->include_paths_count = count;
+                for (int i = 0; i < count; i++)
                 {
-                    svr->include_paths_count = count;
-                    for (int i = 0; i < count; i++)
+                    struct json_object * elem = json_object_array_get_idx(include_paths_arr, i);
+                    if (json_object_is_type(elem, json_type_string))
                     {
-                        struct json_object * elem = json_object_array_get_idx(include_paths_arr, i);
-                        if (json_object_is_type(elem, json_type_string))
-                        {
-                            svr->include_paths[i] = strdup(json_object_get_string(elem));
-                            fprintf(stderr, "[LSP] initialize: include_paths[%d] = \"%s\"\n", i, svr->include_paths[i]);
-                        }
+                        svr->include_paths[i] = strdup(json_object_get_string(elem));
+                        fprintf(stderr, "[LSP] initialize: include_paths[%d] = \"%s\"\n", i, svr->include_paths[i]);
                     }
                 }
             }
         }
-        else
-        {
-            fprintf(stderr, "[LSP] initialize: no includePaths in initializationOptions\n");
-        }
+    }
+    else
+    {
+        fprintf(stderr, "[LSP] initialize: no includePaths in initializationOptions\n");
+    }
+
+    return true;
+}
+
+static bool
+handle_initialization_options(rpc_server_st * svr, struct json_object * params)
+{
+    struct json_object * init_opts = NULL;
+
+    if (json_object_object_get_ex(params, "initializationOptions", &init_opts))
+    {
+        handle_include_paths(svr, init_opts);
     }
     else
     {
         fprintf(stderr, "[LSP] initialize: no initializationOptions\n");
     }
+
+    return true;
+}
+
+static bool
+handle_initialize(rpc_server_st * svr, struct json_object * params, struct json_object * id)
+{
+    handle_initialization_options(svr, params);
 
     struct json_object * result = json_object_new_object();
     struct json_object * capabilities = json_object_new_object();
@@ -76,7 +93,8 @@ handle_initialize(rpc_server_st * svr, struct json_object * params, struct json_
 static bool
 handle_shutdown(rpc_server_st * svr, struct json_object * params, struct json_object * id)
 {
-    (void)params;
+    UNUSED_PARAM(params);
+
     svr->shutdown_requested = true;
     rpc_send_response(svr, id, NULL);
     return true;
@@ -103,10 +121,11 @@ handle_exit(rpc_server_st * svr, struct json_object * params, struct json_object
 static bool
 handle_text_document_did_open(rpc_server_st * svr, struct json_object * params, struct json_object * id)
 {
-    (void)svr;
-    (void)id;
+    UNUSED_PARAM(svr);
+    UNUSED_PARAM(id);
 
     struct json_object * text_document = NULL;
+
     if (!json_object_object_get_ex(params, "textDocument", &text_document))
     {
         fprintf(stderr, "[LSP] Error: 'textDocument' field missing in params\n");
@@ -115,6 +134,7 @@ handle_text_document_did_open(rpc_server_st * svr, struct json_object * params, 
 
     struct json_object * uri_obj = NULL;
     struct json_object * text_obj = NULL;
+
     if (!json_object_object_get_ex(text_document, "uri", &uri_obj)
         || !json_object_object_get_ex(text_document, "text", &text_obj))
     {
@@ -130,22 +150,25 @@ handle_text_document_did_open(rpc_server_st * svr, struct json_object * params, 
 static bool
 handle_text_document_did_change(rpc_server_st * svr, struct json_object * params, struct json_object * id)
 {
-    (void)svr;
-    (void)id;
+    UNUSED_PARAM(svr);
+    UNUSED_PARAM(id);
 
     struct json_object * text_document = NULL;
+
     if (!json_object_object_get_ex(params, "textDocument", &text_document))
     {
         return false;
     }
 
     struct json_object * uri_obj = NULL;
+
     if (!json_object_object_get_ex(text_document, "uri", &uri_obj))
     {
         return false;
     }
 
     struct json_object * content_changes = NULL;
+
     if (!json_object_object_get_ex(params, "contentChanges", &content_changes)
         || json_object_array_length(content_changes) < 1)
     {
@@ -154,6 +177,7 @@ handle_text_document_did_change(rpc_server_st * svr, struct json_object * params
 
     struct json_object * change = json_object_array_get_idx(content_changes, 0);
     struct json_object * text_obj = NULL;
+
     if (!json_object_object_get_ex(change, "text", &text_obj))
     {
         return false;
@@ -167,16 +191,18 @@ handle_text_document_did_change(rpc_server_st * svr, struct json_object * params
 static bool
 handle_text_document_did_close(rpc_server_st * svr, struct json_object * params, struct json_object * id)
 {
-    (void)svr;
-    (void)id;
+    UNUSED_PARAM(svr);
+    UNUSED_PARAM(id);
 
     struct json_object * text_document = NULL;
+
     if (!json_object_object_get_ex(params, "textDocument", &text_document))
     {
         return false;
     }
 
     struct json_object * uri_obj = NULL;
+
     if (!json_object_object_get_ex(text_document, "uri", &uri_obj))
     {
         return false;
@@ -201,12 +227,11 @@ complexity_on_complete(tool_run_st * run, void * user_data)
 {
     complexity_ctx_st * ctx = user_data;
     rpc_server_st * svr = ctx->svr;
-
     int complexity_value = -1;
     char func_name_buf[256] = "";
-
     char const * output = tool_run_output(run);
-    if (output && output[0])
+
+    if (output != NULL && output[0] != '\0')
     {
         struct json_object * arr = json_tokener_parse(output);
         if (arr && json_object_is_type(arr, json_type_array))
@@ -232,6 +257,7 @@ complexity_on_complete(tool_run_st * run, void * user_data)
     }
 
     struct json_object * result = json_object_new_object();
+
     json_object_object_add(result, "complexity", json_object_new_int(complexity_value));
     if (func_name_buf[0])
     {
@@ -240,7 +266,7 @@ complexity_on_complete(tool_run_st * run, void * user_data)
 
     rpc_send_response(svr, ctx->id, result);
 
-    if (run->temp_path)
+    if (run->temp_path != NULL)
     {
         unlink(run->temp_path);
         free(run->temp_path);
@@ -276,7 +302,12 @@ handle_function_complexity(rpc_server_st * svr, struct json_object * params, str
     char const * uri = json_object_get_string(uri_obj);
     char const * function_name = json_object_get_string(func_name_obj);
 
-    fprintf(stderr, "[LSP] complexity: uri=%s, function=%s\n", uri ? uri : "(null)", function_name ? function_name : "(null)");
+    fprintf(
+        stderr,
+        "[LSP] complexity: uri=%s, function=%s\n",
+        uri ? uri : "(null)",
+        function_name ? function_name : "(null)"
+    );
 
     if (!uri || !function_name)
     {
@@ -313,14 +344,16 @@ handle_function_complexity(rpc_server_st * svr, struct json_object * params, str
     /* Build argv. */
     int const num_inc_paths = svr->include_paths_count;
     int const argc = 1 + 2 + 1 + (num_inc_paths * 2) + 1 + 1;
-    char ** argv = malloc((size_t)argc * sizeof(char *));
-    if (!argv)
+    char ** argv = malloc((size_t)argc * sizeof(*argv));
+
+    if (argv == NULL)
     {
         unlink(tmp_pattern);
         return false;
     }
 
     int arg_idx = 0;
+
     argv[arg_idx++] = "cyclomatic_complexity";
     argv[arg_idx++] = "-j";
     argv[arg_idx++] = "-f";
@@ -346,7 +379,8 @@ handle_function_complexity(rpc_server_st * svr, struct json_object * params, str
 
     /* Allocate context and start the tool. */
     complexity_ctx_st * ctx = calloc(1, sizeof(*ctx));
-    if (!ctx)
+
+    if (ctx == NULL)
     {
         free(argv);
         unlink(tmp_pattern);
@@ -354,14 +388,19 @@ handle_function_complexity(rpc_server_st * svr, struct json_object * params, str
     }
 
     ctx->svr = svr;
-    ctx->id = id ? json_object_get(id) : NULL;
+    ctx->id = id != NULL ? json_object_get(id) : NULL;
 
     tool_run_init(&ctx->tool_run);
 
-    if (!tool_run_start(&ctx->tool_run, &svr->tool_queue,
-                        CYCLOMATIC_COMPLEXITY_PATH, argv,
-                        strdup(tmp_pattern),
-                        complexity_on_complete, ctx))
+    if (!tool_run_start(
+            &ctx->tool_run,
+            &svr->tool_queue,
+            CYCLOMATIC_COMPLEXITY_PATH,
+            argv,
+            strdup(tmp_pattern),
+            complexity_on_complete,
+            ctx
+        ))
     {
         free(argv);
         unlink(tmp_pattern);
@@ -381,6 +420,7 @@ handle_initialized(rpc_server_st * svr, struct json_object * params, struct json
     UNUSED_PARAM(svr);
     UNUSED_PARAM(params);
     UNUSED_PARAM(id);
+
     return true;
 }
 
