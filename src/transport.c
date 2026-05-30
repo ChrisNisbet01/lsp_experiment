@@ -105,7 +105,10 @@ stdin_cb(struct uloop_fd * u, unsigned int events)
     UNUSED_PARAM(events);
     rpc_server_st * const svr = container_of(u, rpc_server_st, stdin_fd);
 
-    if (u->eof)
+    char tmp[4096];
+    ssize_t n = read(u->fd, tmp, sizeof(tmp));
+
+    if (n == 0)
     {
         svr->eof_reached = true;
         uloop_fd_delete(u);
@@ -113,31 +116,17 @@ stdin_cb(struct uloop_fd * u, unsigned int events)
         return;
     }
 
-    if (u->error)
+    if (n < 0)
     {
-        uloop_fd_delete(u);
-        uloop_end();
-        return;
-    }
-
-    char tmp[4096];
-    ssize_t n = read(u->fd, tmp, sizeof(tmp));
-
-    if (n <= 0)
-    {
-        if (n == 0)
-        {
-            svr->eof_reached = true;
-            uloop_fd_delete(u);
-            check_exit_condition(svr);
-        }
-        else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
+        if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)
         {
             uloop_fd_delete(u);
             uloop_end();
         }
         return;
     }
+
+    fprintf(stderr, "[LSP] read %zu bytes from stdin\n", (size_t)n);
 
     if (!append_to_buffer(svr, tmp, (size_t)n))
     {
@@ -160,6 +149,8 @@ stdin_cb(struct uloop_fd * u, unsigned int events)
             uloop_end();
             return;
         }
+
+        fprintf(stderr, "[LSP] decoded %zu-byte frame\n", msg_len);
 
         char saved = svr->buf[msg_offset + msg_len];
         svr->buf[msg_offset + msg_len] = '\0';
@@ -202,6 +193,8 @@ transport_cleanup(rpc_server_st * svr)
 void
 transport_send(rpc_server_st * svr, char const * data, size_t len)
 {
+    fprintf(stderr, "[LSP] queued %zu bytes for send\n", len);
+
     write_queue_entry_st * entry = malloc(sizeof(*entry));
     entry->len = len;
     entry->buf = malloc(len);
@@ -228,5 +221,5 @@ transport_close_stdin(rpc_server_st * svr)
 bool
 transport_can_exit(rpc_server_st * svr)
 {
-    return svr->eof_reached && list_empty(&svr->write_queue) && list_empty(&svr->tool_queue.tasks_active.list);
+    return svr->eof_reached && list_empty(&svr->write_queue);
 }
